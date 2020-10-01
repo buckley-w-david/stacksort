@@ -40,6 +40,17 @@ class RemovePrints(ast.NodeTransformer):
             return None
         return node
 
+class RemoveAssigns(ast.NodeTransformer):
+    def __init__(self, name, *args, **kwargs):
+        self.__yeet = name
+        super().__init__(*args, **kwargs)
+
+    def visit_Assign(self, node):
+        if isinstance(node.targets[0], _ast.Name) and node.targets[0].id == self.__yeet:
+            return None
+        return node
+
+
 remove_prints = RemovePrints()
 
 class StackRunner:
@@ -60,8 +71,10 @@ class StackRunner:
         # trying to recurse since it does not exist in the actual global namespace
         #
         # If I were crazy, I could re-write the ast when compiling to change all refernces to functions
-        # defined within the ast to be looked up in a passed-in dict instead of letting python
-        # do normal name resolution
+        # defined within the global score in the ast to be looked up in a passed-in dict instead of letting python
+        # do normal name resolution on them
+        #
+        # *Sigh*... I am that crazy TODO
 
         exec(compiled_module, globals())
 
@@ -69,7 +82,7 @@ class StackRunner:
         ul = unsorted_list.copy()
 
         if self.working_entrypoint:
-            return self.working_entrypoint(unsorted_list)
+            return self.working_entrypoint(ul)
 
         for entrypoint in entrypoints(self.tree):
             try:
@@ -80,6 +93,12 @@ class StackRunner:
                     self.working_entrypoint = func
                     return val
                 # If it didn't return a value, check if it modified the list in-place
+                # Checking properties of the returned list kinda goes against the spriit of the idea
+                # but if we don't, then our analysis and function wrapping work works against us
+                # since things that are wrong will no longer just blow up, they'll pretty much always return
+                # something
+                # Also this fails for pre-sorted lists
+                # FIXME
                 elif ul != unsorted_list:
                     # Wrap the in-place function to make it return the sorted list
                     def func2(unsorted_list):
@@ -94,30 +113,105 @@ class StackRunner:
 
         raise NoValidCodeError("¯\_(ツ)_/¯") from self.err
 
-
-# Heuristics Time!
-# It has functions:
-#   - Should we remove non-function elements? Probably not for now
-#   - Try to call the functions
-#       - If it has more than 1 function, try each?
-#       - Only call functions that take a single argument, this is likely to catch any main funciton + recursive worker setup and call the right one
-#           - What about functions that have 1 required argument and some more arguments but they have a default value?
-# There are no functions:
-#  - We make one ;)
-#  - We'll need to scan the code for references to variables that do not have an assignment, those will be our function arguments
-#       - If there is more than one such reference, we probably just bail since we only have 1 value to pass in (the unsorted list)
-#       - If there are none, that probably means that the answer seeded an example list to sort. We could try to scan for list variable creation in this case and yeet it
-#           - only check in the top level
-#  - How do we handle knowing what to return...
-#       - look for initialization of empty lists?  Probably a good candidate for what to return
-#       - some of these will sort the list in-place, return the list param?
+    def bubble(self):
+        return self
 
 def compile_sorter(code: str):
     try:
-        new_code = str(refactoring_tool.refactor_string(code, 'StackOverflow'))
-        tree = ast.fix_missing_locations(ast.parse(new_code))
+        # Using 2to3 to try to convert py2 code to py3
+        # It's pretty cute
+        try:
+            new_code = str(refactoring_tool.refactor_string(code, 'StackOverflow'))
+        except:
+            new_code = code
+
+        tree = ast.parse(new_code)
+
+        # Who wants their sort functions to print random garbage?
         new_tree = remove_prints.visit(tree)
-        compiled_code = compile(new_tree, '<StackOverflow>', 'exec')
+
+        # TODO
+        # Scan the tree for global functions
+        # replace calls to those functions with lookups in some kind of dict
+        # this lets us avoid polluting the global namespace
+        # it's also completely fucking crazy
+
+        # If the code does not define any functions
+        if not any(isinstance(node, _ast.FunctionDef) for node in new_tree.body):
+            # Determine paramater name
+            #
+            # SCRAPPED - Getting a list of names referenced is easy, but figuring out which of them
+            # are unitialized is impossible. You can hack it to probably get most of the way there
+            # but technically it can be done completely dynamically via strings and such.
+            #
+            # Scan for usages of variables that have not been declared -
+            #  - If there is 1, you have found your paramater name
+            #  - If there are 0, look for a variable that was initialized to a list
+            #  - If there are more than 1, abort probably
+            #
+            # -----------------------------------------
+            #
+            # At least for now, we're gonna be lazy
+            # Any top level lists created that are not empty = our paramater
+            # Otherwise, we give up.
+            #
+            # Figure out what to return
+            #  - If there is a variable initialized to an empty list, return that
+            #  - else, return the function paramater (assume in-place sort)
+
+            return_name = None
+            param_name = None
+
+            for node in new_tree.body:
+                if isinstance(node, _ast.Assign):
+                    if isinstance(node.value, _ast.List):
+                        if len(node.value.elts):
+                            param_name = node.targets[0].id
+                        else:
+                            return_name = node.targets[0].id
+            return_name = return_name or param_name
+
+            if not param_name:
+                raise NoValidCodeError("¯\_(ツ)_/¯")
+
+            # Yeet assignments to the paramater found in first section
+            yeeter = RemoveAssigns(param_name)
+            newer_tree = yeeter.visit(new_tree)
+
+            # Wrap the code in a function called sort
+            # Man, how did I get to the point in my life where I'm manually writing ASTs?
+            sort_func = ast.FunctionDef(
+                name='sort',
+                args=ast.arguments(
+                    posonlyargs=[],
+                    args=[
+                        ast.arg(
+                            arg=param_name,
+                            annotation=None,
+                            type_comment=None
+                        )
+                    ],
+                    vararg=None,
+                    kwonlyargs=[],
+                    kw_defaults=[],
+                    kwarg=None,
+                    defaults=[]
+                ),
+                body=[
+                    *newer_tree.body,
+                    ast.Return(
+                        value=ast.Name(
+                            id=return_name,
+                            ctx=ast.Load()
+                        )
+                    )
+                ],
+                decorator_list=[],
+                returns=None,
+                type_comment=None
+            )
+            new_tree.body = [sort_func]
+        compiled_code = compile(ast.fix_missing_locations(new_tree), '<StackOverflow>', 'exec')
     except Exception as exc:
         raise
 
