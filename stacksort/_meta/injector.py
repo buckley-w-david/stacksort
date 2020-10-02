@@ -42,8 +42,9 @@ class StackSortRunner():
             logger.debug('CODE BLOCK\n\n%s\n\n', code_block)
             try:
                 runner = compile.compile_sorter(code_block)
+                rval = runner(unsorted_list)
                 self.working_runner = runner
-                return runner(unsorted_list)
+                return rval
             except Exception as e:
                 logger.debug(e)
         raise compile.NoValidCodeError("Whoops")
