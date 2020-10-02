@@ -1,4 +1,5 @@
 from stacksort._meta import injector
+from stacksort._meta.stackoverflow import SelectionStrategy
 import sys
 
 #
