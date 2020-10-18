@@ -6,6 +6,8 @@ Inspired by the famous XKCD comic [Ineffective Sorts](https://xkcd.com/1185/).
 StackSort connects to StackOverflow, searches for 'sort a list', and downloads and runs code snippets until the list is sorted.
 ```
 
+Go look at [StackRunner](https://github.com/buckley-w-david/stackrunner), it's the better version of this.
+
 ## Disclaimer
 
 Please do not actually run this. It has even less safety features than the [JavaScript version](https://gkoberger.github.io/stacksort/).
